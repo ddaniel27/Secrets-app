@@ -3,13 +3,30 @@ dotenv.config();
 import express from "express";
 import bodyParser from "body-parser";
 import mongoose from "mongoose";
-import encrypt from "mongoose-encryption";
 import ejs from "ejs";
+import session from "express-session";
+import passport from "passport";
+import passportLocalMongoose from "passport-local-mongoose";
+
+const app = express();
+
+app.use(express.static("public"));
+app.set("view engine", "ejs");
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(session({
+  secret: process.env.SECRET,
+  resave: false,
+  saveUninitialized: false
+}));
+app.use(passport.initialize());
+app.use(passport.session());
+
 
 mongoose.connect("mongodb://localhost:27017/secretsDB", {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 });
+mongoose.set("useCreateIndex", true);
 const userSchema = new mongoose.Schema({
   email: {
     type: String,
@@ -20,20 +37,11 @@ const userSchema = new mongoose.Schema({
     required: "The password field can't be empty",
   },
 });
-
-const secret = process.env.SECRET;
-userSchema.plugin(encrypt, {
-  secret: secret,
-  encryptedFields: ["password"]
-});
-
+userSchema.plugin(passportLocalMongoose);
 const User = mongoose.model("User", userSchema);
-
-const app = express();
-
-app.use(express.static("public"));
-app.set("view engine", "ejs");
-app.use(bodyParser.urlencoded({ extended: true }));
+passport.use(User.createStrategy());
+passport.serializeUser(User.serializeUser());
+passport.deserializeUser(User.deserializeUser());
 
 app.get("/", function (_, res) {
   res.render("home");
@@ -44,28 +52,25 @@ app
     res.render("register");
   })
   .post(function (req, res) {
-    new User({
-      email: req.body.username,
-      password: req.body.password,
-    }).save(function (err) {
-      if (err) console.log(err);
-      else res.render("secrets");
+    User.register({username: req.body.username}, req.body.password, function(err, user){
+      if(err) res.redirect("/register");
+      else passport.authenticate("local")(_, resp, function(){
+        resp.redirect("/secrets");
+      });
     });
+    
   });
-app
-  .route("/login")
+app.route("/login")
   .get(function (_, res) {
     res.render("login");
   })
-  .post(function (req, res) {
-    User.findOne(
-      { email: req.body.username },
-      function (err, user) {
-        if (err) console.log(err);
-        else if (!user) console.log("User doesn't exist");
-        else user.password == req.body.password ? res.render("secrets") : console.log("Password doesn't match");
-      }
-    );
+  .post(passport.authenticate("local", { failureRedirect: "/login" }),function (req, res) {
+    res.redirect("/secrets");
+  });
+
+app.route("/secrets")
+  .get(function(_,res){
+    res.render("secrets");
   });
 
 app.listen(3000, function () {
